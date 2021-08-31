@@ -1,41 +1,42 @@
-"""THIS SCRIPT REQUIRES A LOT MEMORY.
-TO SAVE MEMORY, DO NOT LOAD ALL MODES AT THE SAME TIME"""
+"""Scripts for the baseline model"""
 import numpy as np
 from tqdm import tqdm
 from joblib import Parallel, delayed
 
-def baseline(train_rest, train_task, test_rest,
-             test_task, standardise=True, n_jobs=1):
+
+def baseline(bases_train, tasks_train, bases_test, tasks_test, standardise=True, n_jobs=1):
     """
-    function to fit the baseline model
-    :param train_rest: resting-state modes (training data)
-        a list of (N, V) ndarray, N number of training subjects and V #voxels
-    :param train_task: task contrast maps (training data)
+    function to fit the baseline model.
+    NB this function does not contain the residualisation step, thus either feed in the residualised data (both rest and
+    task) or the original data. Please refer to ensemble.py for the residualisation step.
+    :param bases_train: resting-state modes (training data)
+        a list of (N, V) ndarray, N number of training subjects and V number of voxels
+    :param tasks_train: task contrast maps (training data)
         (N, V) ndarray
-    :param test_rest: resting-state modes (test data)
-        a list of (N, V) ndarray, N number of training subjects and V #voxels
-    :param test_task: task contrast maps (test data)
+    :param bases_test: resting-state modes (test data)
+        a list of (N, V) ndarray, N number of training subjects and V number of voxels
+    :param tasks_test: task contrast maps (test data)
         (N, V) ndarray
-    :param resualise: Boolean, residualise the data or not
-    :param normalise: Boolean, normalise each modes or not
-    :return: baseline_predictions
+    :param standardise: Boolean, whether standardise the resting-state modes (across voxels)
+    :param n_jobs: Int, jobs in parallel
+    :return: Dict, predictions for train and test data {"train": ndarray, "test": ndarray}
     """
     # make individual maps zero-centred
     if standardise:
         print("standardise the data...")
-        for train, test in zip(train_rest, test_rest):
+        for train, test in zip(bases_train, bases_test):
             train /= train.std(axis=1)[:, np.newaxis]
             test /= test.std(axis=1)[:, np.newaxis]
-        train_task /= train_task.std(axis=1)[:, np.newaxis]
-        test_task /= test_task.std(axis=1)[:, np.newaxis]
+        tasks_train /= tasks_train.std(axis=1)[:, np.newaxis]
+        tasks_test /= tasks_test.std(axis=1)[:, np.newaxis]
     # number of training subjects, voxels
-    n_train, n_voxels = train_task.shape
-    n_test = test_task.shape[0]  # number of test subjects
+    n_train, n_voxels = tasks_train.shape
+    n_test = tasks_test.shape[0]  # number of test subjects
     # fit baseline model for each subject
     results = Parallel(n_jobs=n_jobs, prefer="threads")(
         delayed(_fit_baseline)(
-            np.concatenate([el[i][:, np.newaxis] for el in train_rest], axis=1),
-            train_task[i]
+            np.concatenate([el[i][:, np.newaxis] for el in bases_train], axis=1),
+            tasks_train[i]
         ) for i in tqdm(range(n_train))
     )
     # concatenate results
@@ -47,7 +48,7 @@ def baseline(train_rest, train_task, test_rest,
             item[np.newaxis, :]
             for item in Parallel(n_jobs=n_jobs, prefer="threads")(
                 delayed(_predict_baseline)(
-                    np.concatenate([el[i][:, np.newaxis] for el in test_rest], axis=1),
+                    np.concatenate([el[i][:, np.newaxis] for el in bases_test], axis=1),
                     betas.mean(axis=0)
                 ) for i in tqdm(range(n_test))
             )
