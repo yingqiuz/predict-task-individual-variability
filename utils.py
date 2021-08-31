@@ -3,11 +3,24 @@ import scipy
 import argparse
 from sklearn.model_selection import KFold
 from sklearn.decomposition import FastICA
-WDIR = "/well/win-biobank/users/gbb787/ukbiobank/profumo20k/"
+WDIR = "/path/to/my/dir/"
+HCP_CONTRASTS=[
+    '01_EMOTION_FACES','02_EMOTION_SHAPES','03_EMOTION_FACES-SHAPES',
+    '07_GAMBLING_PUNISH','08_GAMBLING_REWARD','09_GAMBLING_PUNISH-REWARD',
+    '13_LANGUAGE_MATH','14_LANGUAGE_STORY','15_LANGUAGE_MATH-STORY',
+    '19_MOTOR_CUE','20_MOTOR_LF','21_MOTOR_LH','22_MOTOR_RF','23_MOTOR_RH','24_MOTOR_T',
+    '25_MOTOR_AVG','26_MOTOR_CUE-AVG','27_MOTOR_LF-AVG','28_MOTOR_LH-AVG','29_MOTOR_RF-AVG',
+    '30_MOTOR_RH-AVG','31_MOTOR_T-AVG','45_RELATIONAL_MATCH','46_RELATIONAL_REL',
+    '47_RELATIONAL_MATCH-REL','51_SOCIAL_RANDOM','52_SOCIAL_TOM','53_SOCIAL_RANDOM-TOM',
+    '57_WM_2BK_BODY','58_WM_2BK_FACE','59_WM_2BK_PLACE','60_WM_2BK_TOOL','61_WM_0BK_BODY',
+    '62_WM_0BK_FACE','63_WM_0BK_PLACE','64_WM_0BK_TOOL','65_WM_2BK','66_WM_0BK','67_WM_2BK-0BK',
+    '71_WM_BODY','72_WM_FACE','73_WM_PLACE','74_WM_TOOL','75_WM_BODY-AVG','76_WM_FACE-AVG','77_WM_PLACE-AVG',
+    '78_WM_TOOL-AVG'
+]
 
 
 def parse_args():
-    """parse argument"""
+    """parse arguments"""
     parser = argparse.ArgumentParser()
     parser.add_argument("-b", "--basis", default="profumo", dest="basis", type=str)
     parser.add_argument("-n1", "--numIC_bases", default='3000', dest="numIC_bases", type=str)
@@ -24,7 +37,11 @@ def parse_args():
 
 
 def pearson_r(X, Y):
-    """Pearson's correlation"""
+    """
+    Calculation Pearson's correlation between spatial maps X and Y
+    :param X: ndarray, voxel by subject
+    :param Y: ndarray, voxel by subjectfisher
+    """
     X_std = (X - X.mean(axis=0)) / X.std(axis=0)
     Y_std = (Y - Y.mean(axis=0)) / Y.std(axis=0)
     return X_std.T.dot(Y_std) / X_std.shape[0]
@@ -33,17 +50,16 @@ def pearson_r(X, Y):
 def score(X, Y):
     """
     return accuracy and discriminability
-    :param X: voxel by subject array-like, predictions
-    :param Y: voxel by subject array-like, truth
-    :return: accuracy: (subject, ), array-like
-    :return: discriminability: (subject, ), array_like
+    :param X: voxel by subject array-like, the predicted maps
+    :param Y: voxel by subject array-like, the actual maps
+    :return: acc: ndarray, (subject, ), prediction accuracy for each subject
+    :return: disc: ndarray (subject, ), prediction disc. for each subject
     """
     acc = pearson_r(X, Y)
     z = np.log((1 + acc) / (1 - acc)) / 2
-    discriminability = np.diag(z) * (1 + 1 / X.shape[1]) \
-        - z.mean(axis=1)
-    accuracy = np.diag(acc)
-    return accuracy, discriminability
+    disc = np.diag(z) * (1 + 1 / X.shape[1]) - z.mean(axis=1)
+    acc = np.diag(acc)
+    return acc, disc
 
 
 def nets_svds(x, n):
@@ -95,14 +111,15 @@ def nets_svds(x, n):
 def ica(train_data, test_data, n_components,
         fun='cube', max_iter=10000):
     """
-
-    :param data:
-    :param fold:
-    :param residualise:
-    :param n_components:
-    :param fun:
-    :param max_iter:
-    :return:
+    conduct ica on the training data, and estimate the mixing matrices for the test data
+    :param train_data: ndarray, subjects x voxels
+    :param test_data: ndarray, subjects x voxels
+    :param n_components: Int, number of independent components
+    :param fun: function used to estimate neg entropy
+    :param max_iter: maximum number of iterations
+    :return train_mixing_matrix: ndarray, the mixing matrix of train_data (as output of ICA)
+    :return test_mixing_matrix: ndarray, the estimated mixing matrix of test data (regress ICA components into test_data)
+    :return components: n_components x voxels, the independent components
     """
     # make individual maps zero-centered
     train_data -= train_data.mean(axis=1)[:, np.newaxis]
@@ -121,9 +138,31 @@ def ica(train_data, test_data, n_components,
 
 
 def pseudo_inverse(x):
+    """equivalent to np.linalg.pinv"""
     u, s, v = nets_svds(x, np.min(x.shape))
     if np.any(s < 1e-3):
-        print("not full rank...is problematic")
+        print("not full rank...")
         s[s<1e-3] = np.inf
     return v.dot(np.diag(1 / s)).dot(u.T)
 
+
+def dual_regression(indiv_data, group_ica):
+    """
+    function to estimate dual regression maps
+    :param indiv_data: ndarray, voxel by time
+    :param group_ica: ndarray voxel by num_modes
+    :return: voxel x num_modes ndarray, the dual regression maps
+    """
+    # if have multiple sessions, average the dual reg maps across sessions
+    v, nt = indiv_data.shape
+    _, d = group_ica.shape
+    # time courses
+    ts = pseudo_inverse(group_ica - group_ica.mean(axis=0)).dot(indiv_data - indiv_data.mean(axis=0))
+    # dr maps
+    indiv_data -= indiv_data.mean(axis=1)[:, np.newaxis]
+    ts -= ts.mean(axis=1)[:, np.newaxis]
+    pinv_ts = pseudo_inverse(ts)
+    dr = indiv_data.dot(pinv_ts)
+    sigsq = np.sum(indiv_data - dr.dot(ts), axis=1) / (nt - d)
+    varcope = np.dot(sigsq[:, np.newaxis], np.diag(np.dot(pinv_ts.T, pinv_ts))[np.newaxis])
+    return dr / np.sqrt(varcope).T
