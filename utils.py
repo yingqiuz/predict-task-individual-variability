@@ -164,5 +164,5 @@ def dual_regression(indiv_data, group_ica):
     pinv_ts = pseudo_inverse(ts)
     dr = indiv_data.dot(pinv_ts)
     sigsq = np.sum(indiv_data - dr.dot(ts), axis=1) / (nt - d)
-    varcope = np.dot(sigsq[:, np.newaxis], np.diag(np.dot(pinv_ts.T, pinv_ts))[np.newaxis])
+    varcope = np.dot(sigsq[:, np.newaxis], np.diag(np.dot(pinv_ts.T, pinv_ts))[np.newaxis, :])
     return dr / np.sqrt(varcope).T
