@@ -40,8 +40,20 @@ def baseline(bases_train, tasks_train, bases_test, tasks_test, standardise=True,
         ) for i in tqdm(range(n_train))
     )
     # concatenate results
-    betas = np.concatenate([el[0][np.newaxis, :] for el in results], axis=0)
-    pred_train = np.concatenate([el[1][np.newaxis, :] for el in results], axis=0)
+    betas = np.concatenate([el[0][np.newaxis, :] for el in results], axis=0).mean(axis=0)
+    # pred_train = np.concatenate([el[1][np.newaxis, :] for el in results], axis=0)
+    pred_train = np.concatenate(
+        [
+            item[np.newaxis, :]
+            for item in Parallel(n_jobs=n_jobs, prefer="threads")(
+                delayed(_predict_baseline)(
+                    np.concatenate([el[i][:, np.newaxis] for el in bases_train], axis=1),
+                    betas
+                ) for i in tqdm(range(n_train))
+            )
+        ],
+        axis=0
+    )
     # make predictiosn for test subjects
     pred_test = np.concatenate(
         [
@@ -49,7 +61,7 @@ def baseline(bases_train, tasks_train, bases_test, tasks_test, standardise=True,
             for item in Parallel(n_jobs=n_jobs, prefer="threads")(
                 delayed(_predict_baseline)(
                     np.concatenate([el[i][:, np.newaxis] for el in bases_test], axis=1),
-                    betas.mean(axis=0)
+                    betas
                 ) for i in tqdm(range(n_test))
             )
         ],
